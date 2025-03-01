@@ -162,6 +162,7 @@ class Post:
 
         self.process_image()
         self.process_callouts()
+        self.process_obsidian_links()
         self.process_urls()
         self.exec_code()
 
@@ -284,6 +285,23 @@ class Post:
                 newline += lines[i][pos:url.start(1)] + process_title(url.group(1))
                 process_zotero_url(url.group(2))
                 pos = url.end(1)
+            lines[i] = newline + lines[i][pos:]
+        self.content = '\n'.join(lines)
+
+    def process_obsidian_links(self):
+        """replace [[**]] to Tag <a>"""
+        def process_title(title):
+            return f"<a href=\"../{title}\">{title}</a>"
+        lines = self.content.splitlines()
+        new_lines = []
+        for i in range(len(lines)):
+            # include obsidian links
+            urls = re.finditer(r"\[\[(.*?)\]\]", lines[i])
+            newline = ""
+            pos = 0
+            for url in urls:
+                newline += lines[i][pos:url.start()] + process_title(url.group(1))
+                pos = url.end()
             lines[i] = newline + lines[i][pos:]
         self.content = '\n'.join(lines)
 
