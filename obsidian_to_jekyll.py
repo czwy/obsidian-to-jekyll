@@ -291,7 +291,7 @@ class Post:
     def process_obsidian_links(self):
         """replace [[**]] to Tag <a>"""
         def process_title(title):
-            return f"<a href=\"../{title}\">{title}</a>"
+            return f"<a href=\"../{title}/\">{title}</a>"
         lines = self.content.splitlines()
         new_lines = []
         for i in range(len(lines)):
