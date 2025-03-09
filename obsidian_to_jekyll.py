@@ -18,6 +18,8 @@ from markdown_it import MarkdownIt  # pip install markdown-it-py[linkify,plugins
 from markdown_it.tree import SyntaxTreeNode
 import mdit_py_plugins.front_matter as md_frontmatter
 import yaml                         # pip install PyYAML
+from datetime import datetime
+import regex                        # pip install regex
 
 post_subdir = "_posts" # Jekyll posts directory
 
@@ -110,6 +112,8 @@ class Note:
         mtime = time.localtime(os.path.getmtime(self.file))
         if 'date' not in self.frontmatter:
             self.frontmatter['date'] = format_time(ctime)
+        elif type(self.frontmatter['date']) == datetime:
+            self.frontmatter['date'] = self.frontmatter['date'].strftime("%Y-%m-%d %H:%M:%S")
         # Chirpy theme key
         if not same_day(ctime, mtime) and 'last_modified_at' not in self.frontmatter:
             self.frontmatter['last_modified_at'] = format_time(mtime)
@@ -289,9 +293,15 @@ class Post:
         self.content = '\n'.join(lines)
 
     def process_obsidian_links(self):
+        """format url"""
+        def sanitize_slug(string: str) -> str:
+            pattern = regex.compile(r'[^\p{M}\p{L}\p{Nd}]+', flags=regex.UNICODE)
+            slug = regex.sub(pattern, '-', string.strip())
+            slug = regex.sub(r'^-|-$', '', slug, flags=regex.IGNORECASE)
+            return slug
         """replace [[**]] to Tag <a>"""
         def process_title(title):
-            return f"<a href=\"../{title}/\">{title}</a>"
+            return f"<a href=\"/posts/{sanitize_slug(title.lower())}/\">{title}</a>"
         lines = self.content.splitlines()
         new_lines = []
         for i in range(len(lines)):
