@@ -29,6 +29,20 @@ def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs, end='')
     print('\033[0m', file=sys.stderr)
 
+def find_file(vault_path,name):
+    """find md file of wikilink"""
+    if '/' in name:
+        glob_path = name + ".md"
+    else:
+        glob_path = "**/" + name + ".md"
+    paths = sorted(pathlib.Path(vault_path).glob(glob_path),
+                    key=lambda p: len(str(p)))
+    if len(paths) >= 1:
+        return paths[0].absolute()
+    else:
+        eprint(f"POST {name} NOT FOUND!!!")
+        exit(-1)
+
 class Note:
     """Obsidian Note Class"""
 
@@ -56,26 +70,12 @@ class Note:
     def __str__(self):
         return f"Note(name={self.name},file={self.file},frontmatter={self.frontmatter},code={self.code})"
 
-    def find_file(self):
-        """find md file of wikilink"""
-        if '/' in self.name:
-            glob_path = self.name + ".md"
-        else:
-            glob_path = "**/" + self.name + ".md"
-        paths = sorted(pathlib.Path(self.vault_path).glob(glob_path),
-                       key=lambda p: len(str(p)))
-        if len(paths) >= 1:
-            return paths[0].absolute()
-        else:
-            eprint(f"POST {self.name} NOT FOUND!!!")
-            exit(-1)
-
     def parse(self, nodes):
         """parse markdown-it-py nodes"""
         for node in nodes:
             if node.type == "heading":
                 self.name = node.children[0].content[2:-2]
-                self.file = self.find_file()
+                self.file = find_file(self.vault_path,self.name)
             elif node.type == "fence" and node.info.lower() == "yaml":
                 self.frontmatter = yaml.load(node.content, yaml.Loader)
             elif node.type == "fence" and node.info.lower() == "python":
@@ -135,7 +135,7 @@ class Note:
 class Post:
     """Jekyll Post Class"""
 
-    def __init__(self, blog_path: str, /, note=None, file=None):
+    def __init__(self, blog_path: str,vault_path, /, note=None, file=None):
         """
         :param blog_path    path of local jekyll repository
         :param note         obsidian note object, used to construct post
@@ -149,6 +149,7 @@ class Post:
             eprint("Post.__init__ DON'T HAVE NOTE OR FILE!!!")
 
         self.blog_path = blog_path
+        self.vault_path = vault_path
         if note:
             self.frontmatter = note.frontmatter
             self.content = note.content
@@ -166,6 +167,7 @@ class Post:
 
         self.process_image()
         self.process_callouts()
+        self.process_embed_note()
         self.process_obsidian_links()
         self.process_urls()
         self.exec_code()
@@ -292,6 +294,71 @@ class Post:
             lines[i] = newline + lines[i][pos:]
         self.content = '\n'.join(lines)
 
+    def process_embed_note(self):
+        def extract_embed_section(embed_file: str, target: str) -> str:
+            file = find_file(self.vault_path,embed_file)
+            f = open(file, encoding='utf-8')
+            md_content = f.read()
+            # 初始化解析器并启用行号跟踪
+            md = (
+                MarkdownIt("commonmark")
+                    .use(md_frontmatter.front_matter_plugin)
+                    .enable(["table","list"])
+            )
+            tokens = md.parse(md_content)
+            root = SyntaxTreeNode(tokens)
+            
+            if target.startswith('^'):
+                filtered = list(map(lambda r:r,filter(lambda node: node.type == "paragraph" and ''.join([child.content for child in node.children if child.type == 'text' or child.type == 'inline']).endswith(target), root.children)))
+                if len(filtered) == 1:
+                    return '\n'+'\n'.join([child.content for child in filtered[0].children if child.type == 'text' or child.type == 'inline']).strip(target) + '\n'
+                else:
+                    return ''
+            else:
+                # 状态变量
+                start_line = -1
+                end_line = -1
+                in_target_section = False
+                
+                level = -1
+                in_target_section = False
+                for node in root.children:
+                    if node.type == "heading":
+                        title = ''.join([child.content for child in node.children if child.type == 'text' or child.type == 'inline'])
+                        if title.strip() == target:
+                            level = node.tag.replace('h', '')  # 提取标题级别
+                            in_target_section = True
+                            start_line = node.map[0]  # 起始行号
+                            continue
+                        # 遇到其他二级或更高标题时结束
+                        if in_target_section and int(level) <= 2:
+                            end_line = node.map[1] - 1  # 结束行号（前一行的末尾）
+                            break
+                
+                if start_line != -1:
+                    lines = md_content.split('\n')
+                    end_line = end_line if end_line != -1 else len(lines)
+                    return '\n'+ '\n'.join(lines[start_line:end_line]).strip()+'\n'
+                return ""
+        def replace_embed_note(content: str) -> str:
+            pattern = regex.compile(r"(\!\[\[(.*?)\#(.*?)\]\])",flags=regex.MULTILINE)
+            if pattern.search(content):
+                lines = content.splitlines()
+                new_lines = []
+                for i in range(len(lines)):
+                    # include obsidian embed note
+                    urls = pattern.finditer(lines[i])
+                    newline = ""
+                    pos = 0
+                    for url in urls:
+                        newline += lines[i][pos:url.start()] + replace_embed_note(extract_embed_section(url.group(2),url.group(3)))
+                        pos = url.end()
+                    lines[i] = newline + lines[i][pos:]
+                return '\n'.join(lines)
+            else:
+                return content
+        self.content = replace_embed_note(self.content)
+
     def process_obsidian_links(self):
         """format url"""
         def sanitize_slug(string: str) -> str:
@@ -300,17 +367,17 @@ class Post:
             slug = regex.sub(r'^-|-$', '', slug, flags=regex.IGNORECASE)
             return slug
         """replace [[**]] to Tag <a>"""
-        def process_title(title):
-            return f"<a href=\"/posts/{sanitize_slug(title.lower())}/\">{title}</a>"
+        def process_title(title, head, alias):
+            return f"<a href=\"/posts/{sanitize_slug(title.lower())}/{head or ''}\">{(alias or title).replace('|','')}</a>"
         lines = self.content.splitlines()
         new_lines = []
         for i in range(len(lines)):
             # include obsidian links
-            urls = re.finditer(r"\[\[(.*?)\]\]", lines[i])
+            urls = re.finditer(r"\[\[(.*?)(\#.*?)?(\|.*?)?\]\]", lines[i])
             newline = ""
             pos = 0
             for url in urls:
-                newline += lines[i][pos:url.start()] + process_title(url.group(1))
+                newline += lines[i][pos:url.start()] + process_title(url.group(1),url.group(2),url.group(3))
                 pos = url.end()
             lines[i] = newline + lines[i][pos:]
         self.content = '\n'.join(lines)
@@ -388,13 +455,13 @@ if len(nodes) > 0:
 modified_posts = []
 newly_added_posts = []
 for note in notes:
-    new_post = Post(blog_path, note=note)
+    new_post = Post(blog_path,vault_path, note=note)
     if args.print:
         print(f"---------- {new_post.file} BEGIN ----------")
         print(new_post.render())
         print(f"---------- {new_post.file} END ----------")
     if pathlib.Path(new_post.full_path).is_file():
-        old_post = Post(blog_path, file=new_post.file)
+        old_post = Post(blog_path,vault_path, file=new_post.file)
         if old_post.frontmatter == new_post.frontmatter:
             if not args.force:
                 # content assumes the same since last_modified_at is equal
