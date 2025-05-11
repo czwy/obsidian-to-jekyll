@@ -308,7 +308,9 @@ class Post:
             tokens = md.parse(md_content)
             root = SyntaxTreeNode(tokens)
             
-            if target.startswith('^'):
+            if target is None:
+                return re.sub(r'---\n.*?\n---\n','',md_content,flags=re.DOTALL)
+            elif target.startswith('^'):
                 filtered = list(map(lambda r:r,filter(lambda node: node.type == "paragraph" and ''.join([child.content for child in node.children if child.type == 'text' or child.type == 'inline']).endswith(target), root.children)))
                 if len(filtered) == 1:
                     return '\n'+'\n'.join([child.content for child in filtered[0].children if child.type == 'text' or child.type == 'inline']).strip(target) + '\n'
@@ -341,7 +343,7 @@ class Post:
                     return '\n'+ '\n'.join(lines[start_line:end_line]).strip()+'\n'
                 return ""
         def replace_embed_note(content: str) -> str:
-            pattern = regex.compile(r"(\!\[\[(.*?)\#(.*?)\]\])",flags=regex.MULTILINE)
+            pattern = regex.compile(r"\!\[\[([^#|]+?)(#(.*?))?(\|(.*?))?\]\]",flags=regex.MULTILINE)
             if pattern.search(content):
                 lines = content.splitlines()
                 new_lines = []
@@ -351,7 +353,7 @@ class Post:
                     newline = ""
                     pos = 0
                     for url in urls:
-                        newline += lines[i][pos:url.start()] + replace_embed_note(extract_embed_section(url.group(2),url.group(3)))
+                        newline += lines[i][pos:url.start()] + replace_embed_note(extract_embed_section(url.group(1),url.group(3)))
                         pos = url.end()
                     lines[i] = newline + lines[i][pos:]
                 return '\n'.join(lines)
